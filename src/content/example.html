@@ -1,0 +1,55 @@
+<script src="/content/OrdJS.js" ></script>
+<script>
+  /**
+   * OrdJS Library Usage Example
+   * 
+   * Demonstrates importing and utilizing the OrdJS Library for interacting with the Ordinals Recursive Endpoints. 
+   * It showcases initializing OrdJS, fetching inscription data, block information, and more. 
+   * `loadAllScripts` dynamically loads the OrdJS script and initializes the library.
+  */
+
+  const ord = new OrdJS('https://testnet.ordinals.com'); 
+
+  async function main() {
+    try {
+
+        const inscriptionId = await ord.getInscriptionId();
+        console.log('Current InscriptionId', inscriptionId);
+        
+        const blockhash = await ord.getBlockhash();
+        console.log('Latest blockhash:', blockhash);
+
+        const blockhash2 = await ord.getBlockhash(0);
+        console.log('Blockhash 0:', blockhash2);
+
+        const blockheight = await ord.getBlockheight();
+        console.log('Latest blockheight:', blockheight);
+
+        const blocktime = await ord.getBlocktime();
+        console.log('Latest blocktime:', blocktime);
+
+        const children = await ord.getChildren('eb204796f838b8c56c0e899cea56f35d24467c3055115560233a5d1cc9c79ec5i0');
+        console.log('Childrens', children);
+
+        const metadata = await ord.getMetadata('eb204796f838b8c56c0e899cea56f35d24467c3055115560233a5d1cc9c79ec5i0');
+        console.log('Metadata', metadata);
+
+        const satInscriptions = await ord.getSatInscriptions(1415569498239777);
+        console.log('Sat Inscriptions', satInscriptions);
+
+        const inscriptionContent = await ord.getInscriptionContent('eb204796f838b8c56c0e899cea56f35d24467c3055115560233a5d1cc9c79ec5i0');
+        console.log('Inscription content', inscriptionContent);
+
+        const satLastInscriptions = await ord.getSatLastInscription(1415569498239777);
+        console.log('Sat Last Inscription', satLastInscriptions);
+
+        const satLastInscriptionContent = await ord.getSatLastInscriptionContent(1415569498239777);
+        console.log('Sat Last Inscription Content', satLastInscriptionContent);
+
+    } catch (error) {
+        console.error('Error:', error);
+    }
+  }
+
+  main();
+</script>
