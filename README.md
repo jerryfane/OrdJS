@@ -16,6 +16,7 @@ Below is the version history of the OrdJS library, including the inscription IDs
 | Version | Inscription ID                                                       | Notes                |
 |---------|----------------------------------------------------------------------|----------------------|
 | 0.1.0   | `3280180e7872eaef3cae589f3122f2f9527d3c1c30445cb13fc6eef03435aa66i0` | Initial beta release |
+| 0.1.1   | `f35346db0fc826e3270b984c8cc219114e24321916ae19eb75ee22c7e55c6a1ei0` | Decode CBOR |
 
 ## Usage
 

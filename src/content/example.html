@@ -1,4 +1,5 @@
-<script src="/content/OrdJS.js" ></script>
+<script src="/src/content/OrdJS.js" ></script>
+
 <script>
   /**
    * OrdJS Library Usage Example
@@ -33,6 +34,9 @@
 
         const metadata = await ord.getMetadata('eb204796f838b8c56c0e899cea56f35d24467c3055115560233a5d1cc9c79ec5i0');
         console.log('Metadata', metadata);
+
+        const metadataDecoded = await ord.getDecodedMetadata('eb204796f838b8c56c0e899cea56f35d24467c3055115560233a5d1cc9c79ec5i0')
+        console.log('Decoded metadata', metadataDecoded);
 
         const satInscriptions = await ord.getSatInscriptions(1415569498239777);
         console.log('Sat Inscriptions', satInscriptions);
