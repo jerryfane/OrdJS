@@ -12,21 +12,27 @@
  */
 
 class OrdJS {
+    // Inscribed CBOR decoder (cbor-js). Replaceable: see README on the decoder.
+    static decoderUrl = '/content/a9f6a9b050af3de1a4ce714978c1f2231ba731f1f46731a16d0e411f89308566i0';
+
     constructor(baseURL) {
       this.baseURL = baseURL;
-      this.isInitialized = false;
       this.decoderPromise = null;
     }
 
+    // Kept for compatibility: nothing needs initialising, and no method waits on
+    // it. It sets isInitialized so an existing caller that reads the flag after
+    // awaiting init() still sees true.
     async init() {
       this.isInitialized = true;
     }
 
-    // The CBOR decoder is inscribed on Bitcoin mainnet and loaded only when
-    // decoded metadata is requested. Concurrent callers share one load.
+    // The CBOR decoder is loaded only when decoded metadata is requested, once,
+    // shared by concurrent callers. OrdJS.decoderUrl points at the inscribed
+    // decoder; override it to test a replacement before it is inscribed.
     loadAndUseDependency() {
       if (!this.decoderPromise) {
-        this.decoderPromise = this.loadScript('/content/a9f6a9b050af3de1a4ce714978c1f2231ba731f1f46731a16d0e411f89308566i0')
+        this.decoderPromise = this.loadScript(OrdJS.decoderUrl)
           .catch((error) => {
             this.decoderPromise = null;
             throw error;

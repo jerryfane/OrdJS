@@ -72,6 +72,11 @@ if (minifiedOk && existsSync(minified)) {
 
   if (withBrowser) {
     run('browser smoke (minified artifact)', 'node', ['scripts/browser-smoke.mjs', minified]);
+    // The decoder candidate is a separate inscription, so it is gated separately:
+    // RFC 8949 Appendix A decoded in Chromium through OrdJS.decoderUrl.
+    if (existsSync(join(root, 'vendor/cbor2-decoder.js'))) {
+      run('decoder candidate conformance', 'node', ['scripts/decoder-smoke.mjs']);
+    }
   } else {
     process.stdout.write('\n=== browser smoke\nSKIPPED (--no-browser): the inscription path is unverified\n');
   }

@@ -1,0 +1,11 @@
+{
+  "source": "cbor2@2.3.0",
+  "license": "MIT",
+  "homepage": "https://github.com/hildjj/cbor2",
+  "global": "CBOR.decode(ArrayBuffer)",
+  "bytes": 46085,
+  "sha256": "1a1268a12cce7040ec879c5e3bf07f9ab1f7846690c37e959c473bf83f7438c5",
+  "builder": "bun 1.3.14 build --minify-syntax --minify-whitespace --target=browser",
+  "inscription_id": null,
+  "note": "Not inscribed. Until it is, serve this file locally and set OrdJS.decoderUrl to its URL."
+}

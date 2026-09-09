@@ -112,6 +112,44 @@ Every failing request throws `OrdJS <status> <endpoint>: <ord's own message>` wi
 without the sat index; ord's message distinguishes them, so it is preserved rather
 than collapsed into "not found".
 
+## The metadata decoder
+
+`getDecodedMetadata` loads a decoder inscription lazily, once, from
+`OrdJS.decoderUrl`. The default is the currently inscribed `cbor-js`
+(`a9f6a9b0…308566i0`), which **decodes some metadata incorrectly**:
+
+| Input | Inscribed decoder | Consequence |
+|---|---|---|
+| `9007199254740993` | `9007199254740992` | integers above 2^53 silently round: nanosecond timestamps, 18-decimal token amounts, snowflake IDs |
+| map with key `1` and key `"1"` | `{"1": …}` | one entry silently disappears |
+| map with key `__proto__` | no own keys, prototype changed | the value stops being data |
+| ~1 MiB CBOR text | `RangeError` | large metadata cannot be decoded at all |
+
+### The replacement candidate
+
+`vendor/cbor2-decoder.js` is the proposed replacement, built by
+`node scripts/build-decoder.mjs` from `cbor2@2.3.0` (MIT, notice retained in the
+artifact). `vendor/cbor2-decoder.json` records its bytes, sha256 and build
+command. **It is not inscribed yet**, so `inscription_id` is `null`.
+
+To use it locally, serve the file and point the library at it:
+
+```javascript
+OrdJS.decoderUrl = '/vendor/cbor2-decoder.js';   // or /content/<id> once inscribed
+```
+
+`node scripts/decoder-smoke.mjs` decodes the RFC 8949 Appendix A vectors in
+Chromium through that exact path: **59/59 correct**, integers above 2^53 arrive as
+`BigInt`, mixed-type keys survive as a `Map`, and `__proto__` stays an own key with
+a clean prototype. The same run against the currently inscribed decoder fails with
+eight findings, so the check discriminates rather than decorates.
+
+Migration is narrower than it looks: ordinary string-keyed metadata still decodes
+to a plain object, so `meta.foo` keeps working. Only genuinely ambiguous maps
+become a `Map`, and only integers beyond 2^53 become `BigInt` — precisely the cases
+that are wrong today.
+
+
 
 ## Tests and the release gate
 
