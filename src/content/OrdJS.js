@@ -1,6 +1,6 @@
 /**
  * OrdJS Library
- * Version: 0.1.2-beta
+ * Version: 0.1.3-beta
  * Author: Jerry the Martian
  *
  * Description:
@@ -15,29 +15,32 @@ class OrdJS {
     constructor(baseURL) {
       this.baseURL = baseURL;
       this.isInitialized = false;
+      this.decoderPromise = null;
     }
 
     async init() {
-      await this.loadAndUseDependency();
       this.isInitialized = true;
-      console.log('OrdJS initialized successfully');
     }
 
-    async loadAndUseDependency() {
-      // Dependencies are inscribed on Bitcoin mainnet
-      await this.loadScript(`/content/a9f6a9b050af3de1a4ce714978c1f2231ba731f1f46731a16d0e411f89308566i0`); //cbor
-      await this.loadScript(`/content/fb15f2a6ed1d3031aa214cc12d3fa696508080c0baa194463920c8a79d21aa54i0`, true);  // buffer
+    // The CBOR decoder is inscribed on Bitcoin mainnet and loaded only when
+    // decoded metadata is requested. Concurrent callers share one load.
+    loadAndUseDependency() {
+      if (!this.decoderPromise) {
+        this.decoderPromise = this.loadScript('/content/a9f6a9b050af3de1a4ce714978c1f2231ba731f1f46731a16d0e411f89308566i0')
+          .catch((error) => {
+            this.decoderPromise = null;
+            throw error;
+          });
+      }
+      return this.decoderPromise;
     }
 
     getInscriptionId() {
       const inscriptionId = window.location.pathname.split("/").pop();
       return inscriptionId || (console.error("URL does not contain a valid inscription ID."), null);
     }
-      
+
     async request(endpoint) {
-      if (!this.isInitialized) {
-        await this.init();
-      }
       const response = await fetch(this.baseURL + endpoint);
       if (!response.ok) {
         throw new Error(`HTTP error! Status: ${response.status}`);
@@ -46,29 +49,37 @@ class OrdJS {
     }
 
     getBlockhash(height = '') {
-      const endpoint = (height !== undefined && height !== '') ? `/r/blockhash/${height}` : '/r/blockhash';
+      const endpoint = OrdJS.given(height) ? `/r/blockhash/${height}` : '/r/blockhash';
       return this.request(endpoint);
     }
-      
+
     getBlockheight() {
       return this.request('/r/blockheight');
     }
-  
+
     getBlocktime() {
       return this.request('/r/blocktime');
     }
-  
+
     getChildren(inscriptionId, page = '') {
-      const endpoint = `/r/children/${inscriptionId}${page ? `/${page}` : ''}`;    
+      const endpoint = `/r/children/${inscriptionId}${OrdJS.given(page) ? `/${page}` : ''}`;
       return this.request(endpoint);
     }
-      
+
     getMetadata(inscriptionId) {
       return this.request(`/r/metadata/${inscriptionId}`);
     }
-  
+
+    // page lists inscriptions on the sat; index selects a single one. They are
+    // separate routes, so supplying both is rejected instead of building an
+    // undocumented URL. Numeric 0 is a valid page and a valid index.
     getSatInscriptions(satNumber, page = '', index = '') {
-      const endpoint = `/r/sat/${satNumber}${page ? `/${page}` : ''}${index ? `/at/${index}` : ''}`;
+      const hasPage = OrdJS.given(page);
+      const hasIndex = OrdJS.given(index);
+      if (hasPage && hasIndex) {
+        return Promise.reject(new Error('Provide either page or index, not both.'));
+      }
+      const endpoint = `/r/sat/${satNumber}${hasPage ? `/${page}` : ''}${hasIndex ? `/at/${index}` : ''}`;
       return this.request(endpoint);
     }
 
@@ -78,27 +89,31 @@ class OrdJS {
         throw new Error(`HTTP error! Status: ${response.status}`);
       }
       const contentType = response.headers.get('Content-Type');
-      const buffer = await response.arrayBuffer();
-      const base64 = btoa(String.fromCharCode(...new Uint8Array(buffer)));
+      const bytes = new Uint8Array(await response.arrayBuffer());
       return {
         mime: contentType,
-        base64: base64
+        base64: OrdJS.toBase64(bytes)
       };
     }
-       
+
     async getSatLastInscription(satNumber) {
       return this.request(`/r/sat/${satNumber}/at/-1`);
     }
-    
+
+    // Resolves to null when the sat carries no inscription, which the endpoint
+    // reports as {"id": null}. Transport and server errors still throw.
     async getSatLastInscriptionContent(satNumber) {
-      const lastInscriptionId = await this.getSatLastInscription(satNumber);
-      return this.getInscriptionContent(lastInscriptionId.id);
+      const last = await this.getSatLastInscription(satNumber);
+      const id = last && last.id;
+      return id == null ? null : this.getInscriptionContent(id);
     }
 
     async getDecodedMetadata(inscriptionId) {
       const encodedMetadata = await this.getMetadata(inscriptionId);
-      const buffer = Buffer.from(encodedMetadata, 'hex');
-      return CBOR.decode(buffer.buffer);
+      // Validate before loading: malformed metadata must not cost a decoder fetch.
+      const bytes = OrdJS.fromHex(encodedMetadata);
+      await this.loadAndUseDependency();
+      return CBOR.decode(bytes.buffer);
     }
 
     loadScript(url, isModule = false) {
@@ -112,6 +127,34 @@ class OrdJS {
         script.onerror = reject;
         document.head.appendChild(script);
       });
+    }
+
+    // Treats only '', null, undefined and NaN as absent, so numeric 0 is kept
+    // while an unparsed Number() stays a fallback instead of a 404 path segment.
+    static given(value) {
+      return value !== '' && value !== null && value !== undefined && value === value;
+    }
+
+    // Builds the binary string in bounded slices: spreading a whole inscription
+    // into String.fromCharCode overflows the call stack on large content.
+    static toBase64(bytes) {
+      let binary = '';
+      for (let i = 0; i < bytes.length; i += 8192) {
+        binary += String.fromCharCode.apply(null, bytes.subarray(i, i + 8192));
+      }
+      return btoa(binary);
+    }
+
+    // Native hex decoding, so no Buffer polyfill inscription is required.
+    static fromHex(hex) {
+      if (typeof hex !== 'string' || hex.length % 2 || /[^0-9a-fA-F]/.test(hex)) {
+        throw new Error('Metadata is not a hex string.');
+      }
+      const bytes = new Uint8Array(hex.length / 2);
+      for (let i = 0; i < bytes.length; i++) {
+        bytes[i] = parseInt(hex.substr(i * 2, 2), 16);
+      }
+      return bytes;
     }
 
 }
