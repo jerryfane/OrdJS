@@ -77,7 +77,7 @@ This example outlines the basic structure for utilizing OrdJS within an asynchro
 - The pinned CBOR decoder still loses precision on 64-bit integers and collapses
   distinct map keys. Fixing that needs a separate audited decoder inscription.
 
-## Tests
+## Tests and the release gate
 
 `test/` runs on Node's built-in runner with no dependencies:
 
@@ -85,8 +85,26 @@ This example outlines the basic structure for utilizing OrdJS within an asynchro
 node --test test/ordjs.test.mjs
 ```
 
-Tests, examples and this README are repository files only; inscribing the library
-should use a minified `src/content/OrdJS.js`.
+Before inscribing, run the full gate. It runs the tests, minifies with a pinned
+configuration, re-runs the tests against the **minified** artifact, enforces a byte
+budget against the size of the live inscription, drives a real Chromium that loads
+the library through `/content/<id>` exactly as an inscription does, and prints the
+byte counts, hash and dependency inscription IDs a release record needs:
+
+```sh
+bun install                          # playwright, dev-only
+npx playwright install chromium
+node scripts/gate.mjs                # --no-browser skips only the Chromium stage
+```
+
+CI runs the same gate on every push and pull request.
+
+The gate does not cover, and a release still requires: a real ord server with the
+sat index both enabled and disabled, Firefox and WebKit, and a commit/reveal fee
+dry-run at the chosen rate.
+
+Tests, examples, tooling and this README are repository files only; inscribing the
+library uses a minified `src/content/OrdJS.js` and nothing else.
 
 ## Contributing
 
