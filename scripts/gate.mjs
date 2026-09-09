@@ -70,6 +70,13 @@ if (minifiedOk && existsSync(minified)) {
   process.stdout.write(`\n=== byte budget\n${bytes} B minified, budget ${BUDGET_BYTES} B, ` +
     `${withinBudget ? `${BUDGET_BYTES - bytes} B of headroom` : `${bytes - BUDGET_BYTES} B OVER`}\n`);
 
+  // The manifest check reads two files and needs no browser, so it runs even
+  // under --no-browser: artifact/manifest drift is an integrity failure, not a
+  // browser-dependent one.
+  if (existsSync(join(root, 'vendor/cbor2-decoder.js'))) {
+    run('decoder manifest matches artifact', 'node', ['scripts/check-manifest.mjs']);
+  }
+
   if (withBrowser) {
     run('browser smoke (minified artifact, chromium/firefox/webkit)', 'node',
       ['scripts/browser-smoke.mjs', minified, '--engine', 'all']);
@@ -78,7 +85,6 @@ if (minifiedOk && existsSync(minified)) {
     // against the MINIFIED library, because that is what would ship.
     if (existsSync(join(root, 'vendor/cbor2-decoder.js'))) {
       run('decoder candidate conformance', 'node', ['scripts/decoder-smoke.mjs', '--library', minified]);
-      run('decoder manifest matches artifact', 'node', ['scripts/check-manifest.mjs']);
     }
   } else {
     process.stdout.write('\n=== browser smoke\n' +

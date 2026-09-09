@@ -181,7 +181,7 @@ test('NaN path segments fall back instead of reaching the server', async () => {
 test('endpoint wrappers build their documented routes', async () => {
   const { OrdJS, calls } = load({ body: json({ ok: true }) });
   const ord = new OrdJS('');
-  const hash = '000000000000000000024e0a0ba1e6b3ae8b0b4b1e0b9a3d0a8a1b2c3d4e5f6a7';
+  const hash = '0000000000000000000320283a032748cef8227873ff4872689bf23f1cda83a5'; // real block 840000 hash, 64 hex chars
 
   await ord.getInscription('abci0');
   await ord.getParents('abci0');

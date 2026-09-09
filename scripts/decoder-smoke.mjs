@@ -128,7 +128,13 @@ try {
       if (value instanceof Date) return 'Date';
       if (value instanceof URL) return 'URL';
       if (value instanceof Uint8Array) return 'Uint8Array';
-      if (value && typeof value === 'object') return value.constructor?.name ?? 'object';
+      if (value && typeof value === 'object') {
+        // The library under test may be minified, so a constructor name is not a
+        // stable label. Describe the shape instead.
+        const keys = Object.keys(value);
+        if (keys.includes('tag') || keys.includes('contents')) return `tag wrapper {${keys.join(',')}}`;
+        return `object {${keys.join(',')}}`;
+      }
       return typeof value;
     };
     const migration = {};
@@ -140,7 +146,7 @@ try {
       ['tag 24 encoded-cbor', 'd818456449455446'],
       ['tag 32 URI', 'd82076687474703a2f2f7777772e6578616d706c652e636f6d'],
       ['byte string', '4401020304'],
-      ['string-keyed map {a:1,b:2}', 'a26161016162026'.slice(0, 14)]
+      ['string-keyed map {a:1,b:2}', 'a2616101616202']
     ]) {
       try {
         migration[label] = describe(await ord.getDecodedMetadata(hex));

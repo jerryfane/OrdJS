@@ -144,8 +144,15 @@ for (const row of rows) {
   if (row.reveal_vB < Math.ceil(row.tapscript_bytes / 4)) {
     violations.push(`${row.file}: reveal ${row.reveal_vB} vB is below tapscript/4`);
   }
-  if (row.reveal_weight !== row.reveal_vB * 4 - (row.reveal_vB * 4 - row.reveal_weight)) {
-    violations.push(`${row.file}: weight and vsize disagree`);
+  // BIP 141: vsize is weight/4 rounded up. Recomputed here from the reported
+  // weight rather than restated, so a corrupted weight or vsize is caught.
+  if (row.reveal_vB !== Math.ceil(row.reveal_weight / 4)) {
+    violations.push(`${row.file}: reveal ${row.reveal_vB} vB is not ceil(${row.reveal_weight} weight / 4)`);
+  }
+  // The witness carries the whole body at 1 weight unit per byte, and the
+  // non-witness part is weighted x4, so the reveal weight has a hard floor.
+  if (row.reveal_weight < body + 4 * 60) {
+    violations.push(`${row.file}: reveal weight ${row.reveal_weight} is below the floor for a ${body} B body`);
   }
   if (row.total_vB !== row.reveal_vB + row.commit_vB) {
     violations.push(`${row.file}: total is not reveal + commit`);
