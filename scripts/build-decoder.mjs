@@ -80,7 +80,7 @@ const manifest = {
   sha256: createHash('sha256').update(artifact).digest('hex'),
   builder: `bun ${spawnSync('bun', ['--version'], { encoding: 'utf8' }).stdout?.trim()} build --minify-syntax --minify-whitespace --target=browser`,
   inscription_id: null,
-  note: 'Not inscribed. Until it is, serve this file locally and set OrdJS.decoderUrl to its URL.'
+  note: 'Not inscribed. The library loads its decoder from the fixed /content/<id> path with no configuration hook, so to try this candidate serve it at that path, as scripts/decoder-smoke.mjs does.'
 };
 writeFileSync(manifestFile, JSON.stringify(manifest, null, 2) + '\n');
 

@@ -115,6 +115,7 @@ for (const file of targets) {
   rows.push({
     file: file.replace(root, ''),
     body_bytes: body.length,
+    content_type: contentType,
     tapscript_bytes: reveal.script,
     reveal_weight: reveal.weight,
     reveal_vB: reveal.vsize,
@@ -157,12 +158,52 @@ for (const row of rows) {
   if (row.total_vB !== row.reveal_vB + row.commit_vB) {
     violations.push(`${row.file}: total is not reveal + commit`);
   }
+  // ord's own media table decides this string, and its length lands in the
+  // envelope. A charset parameter nobody inscribes would silently inflate every
+  // figure, so the mapping is pinned rather than trusted.
+  if (row.file.endsWith('.js') && row.content_type !== 'text/javascript') {
+    violations.push(`${row.file}: modelled as ${row.content_type}, but ord inscribes .js as text/javascript`);
+  }
 }
 // Known-answer check on the push encoder itself, independent of any artifact.
 for (const [length, expected] of [[0, 1], [1, 2], [75, 76], [76, 78], [255, 257], [256, 259], [520, 523]]) {
   if (pushSize(length) !== expected) {
     violations.push(`pushSize(${length}) = ${pushSize(length)}, expected ${expected}`);
   }
+}
+
+// GROUND TRUTH. A floor can only catch a large error; these numbers come from the
+// real reveal transaction of the live OrdJS v0.1.2 inscription
+// (4123e324aa3508ae7021a43a1dfc2d9d83fc35029d092877c57234f729068526i0, reveal txid
+// 4123e324..., witness items 64 / 3995 / 33 bytes, weight 4476), whose body is
+// 3911 bytes of text/javascript. If this model of the envelope drifts by even one
+// byte — a mis-sized tag, a wrong chunk size, a charset added to the content type
+// — these equalities fail. That is what makes the stage falsifiable rather than
+// merely bounded.
+const LIVE = { body: 3911, contentType: 'text/javascript', tapscript: 3995, weight: 4476, vsize: 1119 };
+const modelled = revealTransaction(LIVE.body, LIVE.contentType);
+if (modelled.script !== LIVE.tapscript) {
+  violations.push(`known answer: tapscript for the live v0.1.2 body is ${modelled.script} B, on-chain it is ${LIVE.tapscript} B`);
+}
+if (modelled.weight !== LIVE.weight) {
+  violations.push(`known answer: reveal weight for the live v0.1.2 body is ${modelled.weight}, on-chain it is ${LIVE.weight}`);
+}
+if (modelled.vsize !== LIVE.vsize) {
+  violations.push(`known answer: reveal vsize for the live v0.1.2 body is ${modelled.vsize}, expected ${LIVE.vsize}`);
+}
+// The commit side was previously unconstrained: a collapsed commit understated the
+// total by 10% and every stage still passed. Pin its exact serialised size.
+if (commit.vsize !== 154 || commit.weight !== 616) {
+  violations.push(`commit tx is ${commit.vsize} vB / ${commit.weight} wu, expected 154 vB / 616 wu for 1 P2TR in, 2 P2TR out`);
+}
+
+// Body chunking: the 521st byte must start a SECOND push, costing its own
+// 1-byte prefix plus the byte itself, i.e. exactly pushSize(1) = 2 more bytes.
+// A single oversized push (CHUNK raised above 520) makes this 1.
+const oneChunk = envelopeSize(520, 'text/plain');
+const twoChunks = envelopeSize(521, 'text/plain');
+if (twoChunks - oneChunk !== 2) {
+  violations.push(`chunking: crossing 520 bytes changed the envelope by ${twoChunks - oneChunk} B, expected 2 (a second push: 1-byte prefix + 1 byte)`);
 }
 
 console.log(JSON.stringify({

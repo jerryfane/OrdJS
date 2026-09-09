@@ -1,8 +1,8 @@
 // Conformance check for the CBOR decoder candidate, run in a real browser
 // through the path OrdJS actually uses.
 //
-// It serves vendor/cbor2-decoder.js as an inscription would be served, points
-// OrdJS.decoderUrl at it, and decodes the RFC 8949 Appendix A vectors inside the
+// It serves vendor/cbor2-decoder.js exactly where the library asks for its decoder,
+// serves it at the decoder's real /content/<id> path, and decodes the RFC 8949
 // page via getDecodedMetadata — so what is measured is the decoder as loaded
 // recursively, not an import in Node.
 //
@@ -137,6 +137,17 @@ try {
       }
       return typeof value;
     };
+    // Shape alone is not enough: a decoder that returns Invalid Date for every
+    // date, or rewrites a URI to an attacker's host, has the RIGHT SHAPE and the
+    // wrong value. Each probe therefore records what the value actually is.
+    const value = (decoded) => {
+      if (decoded instanceof Date) return `Date(${decoded.toISOString?.() ?? 'Invalid'})`;
+      if (decoded instanceof URL) return `URL(${decoded.href})`;
+      if (decoded instanceof Uint8Array) return `bytes(${[...decoded].join(',')})`;
+      if (decoded instanceof Map) return `Map(${[...decoded].map(([k, v]) => `${typeof k}:${String(k)}=${JSON.stringify(v)}`).join('|')})`;
+      if (decoded && typeof decoded === 'object') return `object(${JSON.stringify(decoded, (k, v) => (v instanceof Uint8Array ? [...v] : v))})`;
+      return JSON.stringify(decoded);
+    };
     const migration = {};
     for (const [label, hex] of [
       ['integer-keyed map {1:2,3:4}', 'a201020304'],
@@ -149,7 +160,8 @@ try {
       ['string-keyed map {a:1,b:2}', 'a2616101616202']
     ]) {
       try {
-        migration[label] = describe(await ord.getDecodedMetadata(hex));
+        const decoded = await ord.getDecodedMetadata(hex);
+        migration[label] = `${describe(decoded)} = ${value(decoded)}`;
       } catch (error) {
         migration[label] = `THROW ${error.message}`;
       }
@@ -170,6 +182,23 @@ if (r.protoIsOwnKey !== '__proto__') problems.push(`__proto__ not an own key: ${
 if (r.protoClean !== true) problems.push('prototype was mutated by a __proto__ key');
 if (r.plainObject !== '{"a":1,"b":2}') problems.push(`string-keyed map is not a plain object: ${r.plainObject}`);
 if (report.decoderLoads !== 1) problems.push(`decoder loaded ${report.decoderLoads} times`);
+
+// The migration probes are also correctness probes: a decoder can hold the right
+// SHAPE and the wrong VALUE. An Invalid Date, or a URI silently rewritten to
+// another host, would otherwise be published as an acceptable migration.
+const expectedValues = {
+  'integer-keyed map {1:2,3:4}': 'Map(2) = Map(number:1=2|number:3=4)',
+  'tag 0 date string': 'Date = Date(2013-03-21T20:04:00.000Z)',
+  'tag 1 epoch': 'Date = Date(2013-03-21T20:04:00.000Z)',
+  'tag 32 URI': 'URL = URL(http://www.example.com/)',
+  'byte string': 'Uint8Array = bytes(1,2,3,4)',
+  'string-keyed map {a:1,b:2}': 'object {a,b} = object({"a":1,"b":2})'
+};
+for (const [label, expected] of Object.entries(expectedValues)) {
+  if (report.migration[label] !== expected) {
+    problems.push(`migration ${label}: expected ${expected}, got ${report.migration[label]}`);
+  }
+}
 
 console.log(`RFC 8949 Appendix A: ${report.passed}/${report.total} vectors decoded correctly in Chromium`);
 console.log(`  (${report.total} of the 82 upstream entries carry a decoded value; the other 23 are diagnostic-only`);
