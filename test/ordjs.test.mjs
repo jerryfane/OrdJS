@@ -161,3 +161,44 @@ test('NaN path segments fall back instead of reaching the server', async () => {
 
   assert.deepEqual(calls, ['/r/sat/9', '/r/sat/9', '/r/children/abci0']);
 });
+
+// Routes verified against mainnet ordinals.com before these wrappers were added:
+// /r/inscription/<id>, /r/parents/<id>[/<page>] (paginates with page_index),
+// /r/children/<id>/inscriptions[/<page>] (paginates with page),
+// /r/undelegated-content/<id>, /r/blockinfo/<height|hash|latest>.
+test('endpoint wrappers build their documented routes', async () => {
+  const { OrdJS, calls } = load({ body: json({ ok: true }) });
+  const ord = new OrdJS('');
+
+  await ord.getInscription('abci0');
+  await ord.getParents('abci0');
+  await ord.getParents('abci0', 0);
+  await ord.getChildrenInscriptions('abci0');
+  await ord.getChildrenInscriptions('abci0', 2);
+  await ord.getBlockInfo('latest');
+
+  assert.deepEqual(calls, [
+    '/r/inscription/abci0',
+    '/r/parents/abci0',
+    '/r/parents/abci0/0',
+    '/r/children/abci0/inscriptions',
+    '/r/children/abci0/inscriptions/2',
+    '/r/blockinfo/latest'
+  ]);
+});
+
+test('undelegated content returns own bytes and does not follow the delegate', async () => {
+  const own = Uint8Array.from([9, 8, 7]);
+  const delegated = Uint8Array.from([1, 1, 1]);
+  const { OrdJS, calls } = load({
+    body: (url) => (url.startsWith('/r/undelegated-content/') ? binary(own)() : binary(delegated)())
+  });
+  const ord = new OrdJS('');
+
+  const undelegated = await ord.getUndelegatedContent('abci0');
+  const followed = await ord.getInscriptionContent('abci0');
+
+  assert.equal(undelegated.base64, Buffer.from(own).toString('base64'));
+  assert.equal(followed.base64, Buffer.from(delegated).toString('base64'));
+  assert.deepEqual(calls, ['/r/undelegated-content/abci0', '/content/abci0']);
+});

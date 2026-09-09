@@ -77,6 +77,31 @@ This example outlines the basic structure for utilizing OrdJS within an asynchro
 - The pinned CBOR decoder still loses precision on 64-bit integers and collapses
   distinct map keys. Fixing that needs a separate audited decoder inscription.
 
+## Endpoint coverage (0.1.3-beta)
+
+Every route below was checked against mainnet `ordinals.com` before being wrapped.
+
+| Method | Route | Notes |
+|---|---|---|
+| `getBlockhash(height?)` | `/r/blockhash[/<height>]` | |
+| `getBlockheight()` | `/r/blockheight` | |
+| `getBlocktime()` | `/r/blocktime` | |
+| `getBlockInfo(query)` | `/r/blockinfo/<height\|hash\|latest>` | a block hash is an art seed, not secure randomness |
+| `getInscription(id)` | `/r/inscription/<id>` | type, length, delegate, sat, location; location is mutable |
+| `getMetadata(id)` | `/r/metadata/<id>` | hex CBOR |
+| `getDecodedMetadata(id)` | `/r/metadata/<id>` | decodes via the CBOR inscription, loaded lazily |
+| `getChildren(id, page?)` | `/r/children/<id>[/<page>]` | IDs only |
+| `getChildrenInscriptions(id, page?)` | `/r/children/<id>/inscriptions[/<page>]` | full details; paginates with `page` |
+| `getParents(id, page?)` | `/r/parents/<id>[/<page>]` | paginates with `page_index`, not `page` |
+| `getSatInscriptions(sat, page?, index?)` | `/r/sat/<sat>[/<page>][/at/<index>]` | page and index are mutually exclusive |
+| `getSatLastInscription(sat)` | `/r/sat/<sat>/at/-1` | may answer `{"id": null}` |
+| `getSatLastInscriptionContent(sat)` | above, then `/content/<id>` | resolves `null` for an empty sat |
+| `getInscriptionContent(id)` | `/content/<id>` | follows a delegate; returns `{mime, base64}` |
+| `getUndelegatedContent(id)` | `/r/undelegated-content/<id>` | the inscription's own bytes, delegate not followed |
+
+`request(endpoint)` remains available for any JSON route without a wrapper.
+
+
 ## Tests and the release gate
 
 `test/` runs on Node's built-in runner with no dependencies:

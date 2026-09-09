@@ -70,6 +70,28 @@ class OrdJS {
       return this.request(`/r/metadata/${inscriptionId}`);
     }
 
+    // Inscription details: content type, length, delegate, sat, location. Fields
+    // may be null, and location/address are mutable even though the ID is not.
+    getInscription(inscriptionId) {
+      return this.request(`/r/inscription/${inscriptionId}`);
+    }
+
+    // Parent IDs. This endpoint paginates with page_index, unlike children's page.
+    getParents(inscriptionId, page = '') {
+      return this.request(`/r/parents/${inscriptionId}${OrdJS.given(page) ? `/${page}` : ''}`);
+    }
+
+    // Child details rather than bare IDs: one request instead of N getInscription
+    // calls. Paginates with page.
+    getChildrenInscriptions(inscriptionId, page = '') {
+      return this.request(`/r/children/${inscriptionId}/inscriptions${OrdJS.given(page) ? `/${page}` : ''}`);
+    }
+
+    // Block statistics for a height, hash, or 'latest'.
+    getBlockInfo(query) {
+      return this.request(`/r/blockinfo/${query}`);
+    }
+
     // page lists inscriptions on the sat; index selects a single one. They are
     // separate routes, so supplying both is rejected instead of building an
     // undocumented URL. Numeric 0 is a valid page and a valid index.
@@ -83,8 +105,18 @@ class OrdJS {
       return this.request(endpoint);
     }
 
-    async getInscriptionContent(inscriptionId) {
-      const response = await fetch(this.baseURL + `/content/${inscriptionId}`);
+    getInscriptionContent(inscriptionId) {
+      return this.fetchContent(`/content/${inscriptionId}`);
+    }
+
+    // The inscription's OWN bytes. /content/<id> follows a delegate; this does not,
+    // so a delegating inscription returns its own body here.
+    getUndelegatedContent(inscriptionId) {
+      return this.fetchContent(`/r/undelegated-content/${inscriptionId}`);
+    }
+
+    async fetchContent(endpoint) {
+      const response = await fetch(this.baseURL + endpoint);
       if (!response.ok) {
         throw new Error(`HTTP error! Status: ${response.status}`);
       }
