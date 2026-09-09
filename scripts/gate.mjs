@@ -5,15 +5,18 @@
 // record needs.
 //
 //   node scripts/gate.mjs            full gate (needs bun + playwright chromium)
-//   node scripts/gate.mjs --no-browser   skip only the real-browser stage
+//   node scripts/gate.mjs --no-browser   skip only the browser-dependent stages
 //
 // Stages:
 //   1. unit tests against the readable source
 //   2. minify with a pinned, recorded configuration
 //   3. unit tests again against the MINIFIED artifact (the thing that ships)
 //   4. byte budget: the artifact must not exceed the live inscription body
-//   5. real browser: recursive /content/<id> load, 1 MiB round-trip, lazy decoder
-//   6. release record: sizes, hashes, dependency inscription IDs
+//   5. decoder manifest: recorded bytes/sha256/notice still match the artifact
+//   6. real browsers: chromium, firefox and webkit through /content/<id>
+//   7. decoder conformance: RFC 8949 Appendix A through the recursive loader
+//   8. fee estimate: envelope/tapscript/witness serialisation with known answers
+//   9. release record: sizes, hashes, dependency inscription IDs
 
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
@@ -70,11 +73,42 @@ if (minifiedOk && existsSync(minified)) {
   process.stdout.write(`\n=== byte budget\n${bytes} B minified, budget ${BUDGET_BYTES} B, ` +
     `${withinBudget ? `${BUDGET_BYTES - bytes} B of headroom` : `${bytes - BUDGET_BYTES} B OVER`}\n`);
 
-  if (withBrowser) {
-    run('browser smoke (minified artifact)', 'node', ['scripts/browser-smoke.mjs', minified]);
-  } else {
-    process.stdout.write('\n=== browser smoke\nSKIPPED (--no-browser): the inscription path is unverified\n');
+  // The manifest check reads two files and needs no browser, so it runs even
+  // under --no-browser: artifact/manifest drift is an integrity failure, not a
+  // browser-dependent one.
+  //
+  // A MISSING candidate is not a silent pass. Deleting the artifact used to make
+  // both decoder stages disappear from the summary while the gate still reported
+  // success, so the manifest deciding the candidate exists is what is checked.
+  const manifestPresent = existsSync(join(root, 'vendor/cbor2-decoder.json'));
+  const artifactPresent = existsSync(join(root, 'vendor/cbor2-decoder.js'));
+  if (manifestPresent !== artifactPresent) {
+    steps.push({
+      name: `decoder candidate is complete (manifest ${manifestPresent ? 'present' : 'missing'}, artifact ${artifactPresent ? 'present' : 'missing'})`,
+      ok: false
+    });
+    process.stdout.write('\n=== decoder candidate\nFAIL: the manifest and the artifact must exist together\n');
   }
+  if (artifactPresent && manifestPresent) {
+    run('decoder manifest matches artifact', 'node', ['scripts/check-manifest.mjs']);
+  }
+
+  if (withBrowser) {
+    run('browser smoke (minified artifact, chromium/firefox/webkit)', 'node',
+      ['scripts/browser-smoke.mjs', minified, '--engine', 'all']);
+    // The decoder candidate is a separate inscription, so it is gated separately:
+    // RFC 8949 Appendix A decoded in Chromium through the recursive loader, and
+    // against the MINIFIED library, because that is what would ship.
+    if (artifactPresent && manifestPresent) {
+      run('decoder candidate conformance', 'node', ['scripts/decoder-smoke.mjs', '--library', minified]);
+    }
+  } else {
+    process.stdout.write('\n=== browser smoke\n' +
+      'SKIPPED (--no-browser): the inscription path, all three engines AND the decoder\n' +
+      'candidate conformance are unverified in this run\n');
+  }
+
+  run('fee estimate', 'node', ['scripts/fee-estimate.mjs', '--rate', '1', '--rate', '5', minified]);
 
   const sha256 = createHash('sha256').update(artifact).digest('hex');
   const commit = spawnSync('git', ['rev-parse', 'HEAD'], { cwd: root, encoding: 'utf8' }).stdout?.trim();
@@ -91,7 +125,9 @@ if (minifiedOk && existsSync(minified)) {
     live_inscription_body_bytes: BUDGET_BYTES
   }, null, 2) + '\n');
   process.stdout.write('\nNot covered by this gate, and required before inscribing: a real ord server ' +
-    '(indexed and non-indexed), Firefox and WebKit, and a commit/reveal fee dry-run at the chosen rate.\n');
+    '(sat index enabled AND disabled), and a wallet dry-run of the real commit/reveal transaction. ' +
+    'The fee stage serialises the envelope, tapscript and witness exactly but assumes a standard ' +
+    'commit shape (1 P2TR input, 2 P2TR outputs).\n');
 }
 
 const failed = steps.filter((step) => !step.ok);

@@ -18,12 +18,16 @@ class OrdJS {
       this.decoderPromise = null;
     }
 
+    // Kept for compatibility: nothing needs initialising and no method waits on
+    // it, but the flag is still set so an existing caller that awaits init() and
+    // reads it sees true.
     async init() {
       this.isInitialized = true;
     }
 
     // The CBOR decoder is inscribed on Bitcoin mainnet and loaded only when
-    // decoded metadata is requested. Concurrent callers share one load.
+    // decoded metadata is requested. Concurrent callers share one load, and a
+    // failed load is retried rather than cached.
     loadAndUseDependency() {
       if (!this.decoderPromise) {
         this.decoderPromise = this.loadScript('/content/a9f6a9b050af3de1a4ce714978c1f2231ba731f1f46731a16d0e411f89308566i0')
@@ -43,7 +47,7 @@ class OrdJS {
     async request(endpoint) {
       const response = await fetch(this.baseURL + endpoint);
       if (!response.ok) {
-        throw new Error(`HTTP error! Status: ${response.status}`);
+        throw await OrdJS.httpError(endpoint, response);
       }
       return response.json();
     }
@@ -70,6 +74,29 @@ class OrdJS {
       return this.request(`/r/metadata/${inscriptionId}`);
     }
 
+    // Inscription details: content type, length, delegate, sat, location. Fields
+    // may be null, and location/address are mutable even though the ID is not.
+    getInscription(inscriptionId) {
+      return this.request(`/r/inscription/${inscriptionId}`);
+    }
+
+    // Parent IDs. This endpoint paginates with page_index, unlike children's page.
+    getParents(inscriptionId, page = '') {
+      return this.request(`/r/parents/${inscriptionId}${OrdJS.given(page) ? `/${page}` : ''}`);
+    }
+
+    // Child details rather than bare IDs: one request instead of N getInscription
+    // calls. Paginates with page.
+    getChildrenInscriptions(inscriptionId, page = '') {
+      return this.request(`/r/children/${inscriptionId}/inscriptions${OrdJS.given(page) ? `/${page}` : ''}`);
+    }
+
+    // Block statistics for a height or a 64-character block hash. ord parses this
+    // segment as a height or hash only: 'latest' is rejected with 400.
+    getBlockInfo(query) {
+      return this.request(`/r/blockinfo/${query}`);
+    }
+
     // page lists inscriptions on the sat; index selects a single one. They are
     // separate routes, so supplying both is rejected instead of building an
     // undocumented URL. Numeric 0 is a valid page and a valid index.
@@ -83,10 +110,33 @@ class OrdJS {
       return this.request(endpoint);
     }
 
-    async getInscriptionContent(inscriptionId) {
-      const response = await fetch(this.baseURL + `/content/${inscriptionId}`);
+    getInscriptionContent(inscriptionId) {
+      return this.fetchContent(`/content/${inscriptionId}`);
+    }
+
+    // The inscription's OWN bytes. /content/<id> follows a delegate; this does not,
+    // so a delegating inscription returns its own body here.
+    getUndelegatedContent(inscriptionId) {
+      return this.fetchContent(`/r/undelegated-content/${inscriptionId}`);
+    }
+
+    // One request instead of resolving the ID and then fetching it. Index -1 is the
+    // latest inscription on the sat. Requires an ord with the sat index; an empty
+    // sat and a server without that index both answer 404, and the thrown error
+    // carries ord's own explanation of which it was.
+    //
+    // NOTE the deliberate difference from getSatLastInscriptionContent, which
+    // resolves null for an empty sat because /r/sat/<n>/at/-1 answers 200 with
+    // {"id": null}. Switching to this cheaper method converts that null into a
+    // thrown 404.
+    getSatInscriptionContent(satNumber, index = -1) {
+      return this.fetchContent(`/r/sat/${satNumber}/at/${index}/content`);
+    }
+
+    async fetchContent(endpoint) {
+      const response = await fetch(this.baseURL + endpoint);
       if (!response.ok) {
-        throw new Error(`HTTP error! Status: ${response.status}`);
+        throw await OrdJS.httpError(endpoint, response);
       }
       const contentType = response.headers.get('Content-Type');
       const bytes = new Uint8Array(await response.arrayBuffer());
@@ -94,6 +144,17 @@ class OrdJS {
         mime: contentType,
         base64: OrdJS.toBase64(bytes)
       };
+    }
+
+    // ord explains its own failures in the response body ("inscription on sat 1 not
+    // found", "...metadata not found"). Carrying that text turns an opaque status
+    // into an actionable message; the status and endpoint stay in the message so a
+    // caller can still branch on them.
+    static async httpError(endpoint, response) {
+      const detail = await response.text().catch(() => '');
+      const error = new Error(`OrdJS ${response.status} ${endpoint}: ${detail.trim().slice(0, 200)}`);
+      error.status = response.status;
+      return error;
     }
 
     async getSatLastInscription(satNumber) {

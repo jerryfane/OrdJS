@@ -59,6 +59,14 @@ const binary = (bytes) => async () => ({
   arrayBuffer: async () => bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength)
 });
 
+// ord answers a failure with a plain-text explanation, e.g.
+// "inscription on sat 1 not found" (verified against mainnet ordinals.com).
+const failure = (status, message) => async () => ({
+  ok: false,
+  status,
+  text: async () => message
+});
+
 test('numeric index and page select their exact sat routes', async () => {
   const { OrdJS, calls } = load({ body: json({ ok: true }) });
   const ord = new OrdJS('');
@@ -160,4 +168,93 @@ test('NaN path segments fall back instead of reaching the server', async () => {
   await ord.getChildren('abci0', Number('nope'));
 
   assert.deepEqual(calls, ['/r/sat/9', '/r/sat/9', '/r/children/abci0']);
+});
+
+// Routes verified against mainnet ordinals.com before these wrappers were added:
+// /r/inscription/<id>, /r/parents/<id>[/<page>] (paginates with page_index),
+// /r/children/<id>/inscriptions[/<page>] (paginates with page),
+// /r/undelegated-content/<id>, /r/blockinfo/<height|hash>.
+//
+// This test can only prove string construction; it cannot prove a route exists.
+// 'latest' was documented here until a live probe returned 400 ("invalid digit
+// found in string"), so the height and hash forms are what is pinned.
+test('endpoint wrappers build their documented routes', async () => {
+  const { OrdJS, calls } = load({ body: json({ ok: true }) });
+  const ord = new OrdJS('');
+  const hash = '0000000000000000000320283a032748cef8227873ff4872689bf23f1cda83a5'; // real block 840000 hash, 64 hex chars
+
+  await ord.getInscription('abci0');
+  await ord.getParents('abci0');
+  await ord.getParents('abci0', 0);
+  await ord.getChildrenInscriptions('abci0');
+  await ord.getChildrenInscriptions('abci0', 2);
+  await ord.getBlockInfo(840000);
+  await ord.getBlockInfo(hash);
+
+  assert.deepEqual(calls, [
+    '/r/inscription/abci0',
+    '/r/parents/abci0',
+    '/r/parents/abci0/0',
+    '/r/children/abci0/inscriptions',
+    '/r/children/abci0/inscriptions/2',
+    '/r/blockinfo/840000',
+    `/r/blockinfo/${hash}`
+  ]);
+});
+
+test('undelegated content returns own bytes and does not follow the delegate', async () => {
+  const own = Uint8Array.from([9, 8, 7]);
+  const delegated = Uint8Array.from([1, 1, 1]);
+  const { OrdJS, calls } = load({
+    body: (url) => (url.startsWith('/r/undelegated-content/') ? binary(own)() : binary(delegated)())
+  });
+  const ord = new OrdJS('');
+
+  const undelegated = await ord.getUndelegatedContent('abci0');
+  const followed = await ord.getInscriptionContent('abci0');
+
+  assert.equal(undelegated.base64, Buffer.from(own).toString('base64'));
+  assert.equal(followed.base64, Buffer.from(delegated).toString('base64'));
+  assert.deepEqual(calls, ['/r/undelegated-content/abci0', '/content/abci0']);
+});
+
+test('indexed sat content is fetched in one request', async () => {
+  const bytes = Uint8Array.from([4, 5, 6]);
+  const { OrdJS, calls } = load({ body: binary(bytes) });
+  const ord = new OrdJS('');
+
+  const latest = await ord.getSatInscriptionContent(1469077634181728);
+  const first = await ord.getSatInscriptionContent(1469077634181728, 0);
+
+  assert.equal(latest.base64, Buffer.from(bytes).toString('base64'));
+  assert.equal(first.base64, Buffer.from(bytes).toString('base64'));
+  assert.deepEqual(calls, [
+    '/r/sat/1469077634181728/at/-1/content',
+    '/r/sat/1469077634181728/at/0/content'
+  ]);
+});
+
+test("a failure carries ord's own explanation, the status and the endpoint", async () => {
+  const { OrdJS } = load({ body: failure(404, 'inscription on sat 1 not found\n') });
+  const ord = new OrdJS('');
+
+  const error = await ord.getSatInscriptionContent(1, 0).then(() => null, (e) => e);
+  assert.match(error.message, /404/);
+  assert.match(error.message, /\/r\/sat\/1\/at\/0\/content/);
+  assert.match(error.message, /inscription on sat 1 not found/);
+  assert.equal(error.status, 404);
+
+  const jsonError = await ord.getMetadata('abci0').then(() => null, (e) => e);
+  assert.match(jsonError.message, /OrdJS 404 \/r\/metadata\/abci0: inscription on sat 1 not found/);
+  assert.equal(jsonError.status, 404);
+});
+
+test('an unreadable error body still produces a usable error', async () => {
+  const { OrdJS } = load({
+    body: async () => ({ ok: false, status: 500, text: async () => { throw new Error('stream closed'); } })
+  });
+
+  const error = await new OrdJS('').getBlockheight().then(() => null, (e) => e);
+  assert.match(error.message, /OrdJS 500 \/r\/blockheight/);
+  assert.equal(error.status, 500);
 });

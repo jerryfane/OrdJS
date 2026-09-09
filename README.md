@@ -77,6 +77,93 @@ This example outlines the basic structure for utilizing OrdJS within an asynchro
 - The pinned CBOR decoder still loses precision on 64-bit integers and collapses
   distinct map keys. Fixing that needs a separate audited decoder inscription.
 
+## Endpoint coverage (0.1.3-beta)
+
+Every route below was checked against mainnet `ordinals.com` before being wrapped.
+
+| Method | Route | Notes |
+|---|---|---|
+| `getBlockhash(height?)` | `/r/blockhash[/<height>]` | |
+| `getBlockheight()` | `/r/blockheight` | |
+| `getBlocktime()` | `/r/blocktime` | |
+| `getBlockInfo(query)` | `/r/blockinfo/<height\|hash>` | `latest` is **not** accepted: ord answers 400. A block hash is an art seed, not secure randomness |
+| `getInscription(id)` | `/r/inscription/<id>` | type, length, delegate, sat, location; location is mutable |
+| `getMetadata(id)` | `/r/metadata/<id>` | hex CBOR |
+| `getDecodedMetadata(id)` | `/r/metadata/<id>` | decodes via the CBOR inscription, loaded lazily |
+| `getChildren(id, page?)` | `/r/children/<id>[/<page>]` | IDs only |
+| `getChildrenInscriptions(id, page?)` | `/r/children/<id>/inscriptions[/<page>]` | full details; paginates with `page` |
+| `getParents(id, page?)` | `/r/parents/<id>[/<page>]` | paginates with `page_index`, not `page` |
+| `getSatInscriptions(sat, page?, index?)` | `/r/sat/<sat>[/<page>][/at/<index>]` | page and index are mutually exclusive |
+| `getSatLastInscription(sat)` | `/r/sat/<sat>/at/-1` | may answer `{"id": null}` |
+| `getSatLastInscriptionContent(sat)` | above, then `/content/<id>` | resolves `null` for an empty sat |
+| `getInscriptionContent(id)` | `/content/<id>` | follows a delegate; returns `{mime, base64}` |
+| `getUndelegatedContent(id)` | `/r/undelegated-content/<id>` | the inscription's own bytes, delegate not followed |
+| `getSatInscriptionContent(sat, index?)` | `/r/sat/<sat>/at/<index>/content` | one request instead of two; needs the sat index; defaults to `-1` |
+
+`request(endpoint)` remains available for any JSON route without a wrapper.
+
+### Errors
+
+Every failing request throws `OrdJS <status> <endpoint>: <ord's own message>` with a
+`status` property, for example
+`OrdJS 404 /r/sat/1/at/0/content: inscription on sat 1 not found`. Branch on
+`error.status`, not on message text. Note that a 404 from
+`getSatInscriptionContent` means either an empty sat **or** a server running
+without the sat index; ord's message distinguishes them, so it is preserved rather
+than collapsed into "not found".
+
+## The metadata decoder
+
+`getDecodedMetadata` loads the inscribed decoder lazily, once. The current one
+(`a9f6a9b0…308566i0`, cbor-js) **decodes some metadata incorrectly**:
+
+| Input | Inscribed decoder | Consequence |
+|---|---|---|
+| `9007199254740993` | `9007199254740992` | integers above 2^53 silently round: nanosecond timestamps, 18-decimal token amounts, snowflake IDs |
+| map with key `1` and key `"1"` | `{"1": …}` | one entry silently disappears |
+| map with key `__proto__` | no own keys, prototype changed | the value stops being data |
+| ~1 MiB CBOR text | `RangeError` | large metadata cannot be decoded at all |
+
+### The replacement candidate
+
+`vendor/cbor2-decoder.js` is the proposed replacement, built by
+`node scripts/build-decoder.mjs` from `cbor2@2.3.0` (MIT, notice retained in the
+artifact). `vendor/cbor2-decoder.json` records its bytes and sha256, and the gate
+verifies the file still matches them. **It is not inscribed yet**, so
+`inscription_id` is `null`.
+
+The library asks for its decoder at a fixed `/content/<id>` path — no configuration
+hook is inscribed for this. To try the candidate, serve it at that path, which is
+what `scripts/decoder-smoke.mjs` does.
+
+That script decodes the vendored RFC 8949 Appendix A fixture in Chromium through
+the real recursive loader: **59 of 59 decodable vectors correct**. Upstream
+Appendix A has 82 entries; 23 are diagnostic-only and carry no expected value, so
+they are not in the fixture and **59/59 is not full Appendix A conformance**. The
+same run against the currently inscribed decoder reports 55/59 with eight problems,
+so the check discriminates rather than decorates.
+
+### Migration cost, measured
+
+More than the broken cases change shape. The decoder smoke prints this table on
+every run; these are all cases the current decoder handles *acceptably*, so they
+are migration cost rather than fixes:
+
+| CBOR | Inscribed decoder | Candidate |
+|---|---|---|
+| `{a:1, b:2}` string keys | plain object | plain object — unchanged |
+| `{1:2, 3:4}` integer keys | plain object, `meta[1]` works | **`Map`**, `meta[1]` is `undefined` |
+| tag 0 / tag 1 date | string / number | **`Date`** |
+| tag 32 URI | string | **`URL`** (adds a trailing slash) |
+| tags 23 / 24 | `Uint8Array` | **`Tag` wrapper** |
+| integers > 2^53 | rounded number | **`BigInt`** |
+
+So: ordinary string-keyed metadata keeps working as `meta.foo`, but a consumer
+using integer keys, tags, or raw byte strings must be updated. That is the real
+cost of the swap, and it is why the decision is a migration rather than a drop-in.
+
+
+
 ## Tests and the release gate
 
 `test/` runs on Node's built-in runner with no dependencies:
@@ -87,21 +174,28 @@ node --test test/ordjs.test.mjs
 
 Before inscribing, run the full gate. It runs the tests, minifies with a pinned
 configuration, re-runs the tests against the **minified** artifact, enforces a byte
-budget against the size of the live inscription, drives a real Chromium that loads
-the library through `/content/<id>` exactly as an inscription does, and prints the
-byte counts, hash and dependency inscription IDs a release record needs:
+budget against the size of the live inscription, drives Chromium, Firefox and
+WebKit through the real `/content/<id>` recursive load, checks the decoder
+candidate against the RFC 8949 fixture and against its own manifest, computes the
+commit/reveal fee from the serialised transaction, and prints the byte counts, hash
+and dependency inscription IDs a release record needs:
 
 ```sh
-bun install                          # playwright, dev-only
-npx playwright install chromium
-node scripts/gate.mjs                # --no-browser skips only the Chromium stage
+bun install                                      # playwright, dev-only
+npx playwright install chromium firefox webkit
+node scripts/gate.mjs                            # --no-browser drops every browser stage
 ```
+
+`--no-browser` skips all three engines **and** the decoder conformance stage, so a
+run with that flag is not release evidence.
 
 CI runs the same gate on every push and pull request.
 
 The gate does not cover, and a release still requires: a real ord server with the
-sat index both enabled and disabled, Firefox and WebKit, and a commit/reveal fee
-dry-run at the chosen rate.
+sat index both enabled and disabled, and a wallet dry-run of the actual
+commit/reveal transaction. The fee stage serialises the envelope, tapscript and
+witness exactly, but it assumes a standard commit shape (1 P2TR input, 2 P2TR
+outputs) rather than your wallet's real input selection.
 
 Tests, examples, tooling and this README are repository files only; inscribing the
 library uses a minified `src/content/OrdJS.js` and nothing else.
