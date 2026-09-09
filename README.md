@@ -55,21 +55,25 @@ This example outlines the basic structure for utilizing OrdJS within an asynchro
 
 ## Behavior notes (0.1.3-beta, not yet inscribed)
 
-- `getSatInscriptions(sat, page, index)` treats only `''`, `null` and `undefined` as
-  absent, so `index` `0` selects `/r/sat/<sat>/at/0` and `page` `0` lists the first
-  page. Passing both `page` and `index` rejects before any request, because they are
-  separate endpoints.
+- `getSatInscriptions(sat, page, index)` treats only `''`, `null`, `undefined` and
+  `NaN` as absent, so `index` `0` selects `/r/sat/<sat>/at/0` and `page` `0` lists the
+  first page. Passing both `page` and `index` rejects before any request, because they
+  are separate endpoints.
 - `getSatLastInscriptionContent(sat)` resolves to `null` when the sat carries no
   inscription (`/r/sat/<sat>/at/-1` answers `{"id": null}`). Transport and server
   errors still throw.
 - `getInscriptionContent(id)` builds its base64 payload in bounded slices, so large
   inscriptions no longer overflow the call stack.
-- Only decoded metadata loads a dependency. `getDecodedMetadata` loads the inscribed
-  CBOR decoder once, on demand, and shares that load across concurrent callers. The
-  Buffer polyfill inscription is no longer referenced: hex is decoded natively and
-  rejected when malformed. Methods other than `getDecodedMetadata` no longer load any
-  script, so a caller that relied on `init()` publishing `CBOR` or `Buffer` globals
-  must call `getDecodedMetadata` or `loadAndUseDependency()` explicitly.
+- Only decoded metadata loads a dependency. `getDecodedMetadata` validates the hex
+  first, then loads the inscribed CBOR decoder once, on demand, sharing that load
+  across concurrent callers; a failed load can be retried. The Buffer polyfill
+  inscription is no longer referenced at all: hex is decoded natively and rejected
+  when malformed, and **no method publishes a `Buffer` global any more** — a consumer
+  that relied on `init()` providing one must supply its own. `CBOR` is still reachable,
+  via `getDecodedMetadata` or an explicit `loadAndUseDependency()`.
+- `init()` is now a no-op that only sets `isInitialized`, and `request()` no longer
+  calls it. The flag no longer implies that any dependency is loaded; do not branch on
+  it to decide whether `CBOR` exists.
 - The pinned CBOR decoder still loses precision on 64-bit integers and collapses
   distinct map keys. Fixing that needs a separate audited decoder inscription.
 

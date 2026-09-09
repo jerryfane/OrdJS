@@ -24,20 +24,29 @@ function load({ body, script } = {}) {
     head: {
       appendChild(element) {
         scripts.push(element.src);
-        queueMicrotask(() => (script === 'fail' ? element.onerror(new Error('load failed')) : element.onload()));
+        // script may be a function so a test can change the outcome between loads.
+        const outcome = typeof script === 'function' ? script() : script;
+        queueMicrotask(() => (outcome === 'fail' ? element.onerror(new Error('load failed')) : element.onload()));
       }
     }
   };
+  // Node-only globals are shadowed with undefined so the inscribed source cannot
+  // silently depend on something a browser does not have (Buffer is the one that
+  // matters: the base version used it and it must never come back).
   const factory = new Function(
-    'fetch', 'document', 'btoa', 'CBOR', 'window',
+    'fetch', 'document', 'btoa', 'CBOR', 'window', 'Buffer', 'process', 'require', 'global',
     `${source}\nreturn OrdJS;`
   );
   const Ctor = factory(
     fetchStub,
     documentStub,
-    (binary) => Buffer.from(binary, 'binary').toString('base64'),
+    (binary) => globalThis.Buffer.from(binary, 'binary').toString('base64'),
     { decode: (buffer) => ({ decoded: [...new Uint8Array(buffer)] }) },
-    { location: { pathname: '/content/abci0' } }
+    { location: { pathname: '/content/abci0' } },
+    undefined,
+    undefined,
+    undefined,
+    undefined
   );
   return { OrdJS: Ctor, calls, scripts };
 }
@@ -125,7 +134,30 @@ test('non-metadata methods work when decoder loading fails', async () => {
   await assert.rejects(ord.getDecodedMetadata('abci0'));
 });
 
-test('malformed metadata hex is rejected', async () => {
-  const { OrdJS } = load({ body: json('zz') });
+test('malformed metadata hex is rejected without loading the decoder', async () => {
+  const { OrdJS, scripts } = load({ body: json('zz') });
   await assert.rejects(new OrdJS('').getDecodedMetadata('abci0'), /not a hex string/);
+  assert.deepEqual(scripts, []);
+});
+
+test('a failed decoder load can be retried', async () => {
+  let mode = 'fail';
+  const { OrdJS, scripts } = load({ body: json('01'), script: () => mode });
+  const ord = new OrdJS('');
+
+  await assert.rejects(ord.getDecodedMetadata('abci0'));
+  mode = 'ok';
+  assert.deepEqual(await ord.getDecodedMetadata('abci0'), { decoded: [1] });
+  assert.equal(scripts.length, 2);
+});
+
+test('NaN path segments fall back instead of reaching the server', async () => {
+  const { OrdJS, calls } = load({ body: json({ ok: true }) });
+  const ord = new OrdJS('');
+
+  await ord.getSatInscriptions(9, Number('nope'));
+  await ord.getSatInscriptions(9, '', Number('nope'));
+  await ord.getChildren('abci0', Number('nope'));
+
+  assert.deepEqual(calls, ['/r/sat/9', '/r/sat/9', '/r/children/abci0']);
 });

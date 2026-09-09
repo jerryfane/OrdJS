@@ -110,8 +110,10 @@ class OrdJS {
 
     async getDecodedMetadata(inscriptionId) {
       const encodedMetadata = await this.getMetadata(inscriptionId);
+      // Validate before loading: malformed metadata must not cost a decoder fetch.
+      const bytes = OrdJS.fromHex(encodedMetadata);
       await this.loadAndUseDependency();
-      return CBOR.decode(OrdJS.fromHex(encodedMetadata).buffer);
+      return CBOR.decode(bytes.buffer);
     }
 
     loadScript(url, isModule = false) {
@@ -127,9 +129,10 @@ class OrdJS {
       });
     }
 
-    // Treats only '', null and undefined as absent, so numeric 0 is kept.
+    // Treats only '', null, undefined and NaN as absent, so numeric 0 is kept
+    // while an unparsed Number() stays a fallback instead of a 404 path segment.
     static given(value) {
-      return value !== '' && value !== null && value !== undefined;
+      return value !== '' && value !== null && value !== undefined && value === value;
     }
 
     // Builds the binary string in bounded slices: spreading a whole inscription
