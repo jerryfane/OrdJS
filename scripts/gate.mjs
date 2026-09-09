@@ -71,7 +71,8 @@ if (minifiedOk && existsSync(minified)) {
     `${withinBudget ? `${BUDGET_BYTES - bytes} B of headroom` : `${bytes - BUDGET_BYTES} B OVER`}\n`);
 
   if (withBrowser) {
-    run('browser smoke (minified artifact)', 'node', ['scripts/browser-smoke.mjs', minified]);
+    run('browser smoke (minified artifact, chromium/firefox/webkit)', 'node',
+      ['scripts/browser-smoke.mjs', minified, '--engine', 'all']);
     // The decoder candidate is a separate inscription, so it is gated separately:
     // RFC 8949 Appendix A decoded in Chromium through OrdJS.decoderUrl.
     if (existsSync(join(root, 'vendor/cbor2-decoder.js'))) {
@@ -80,6 +81,8 @@ if (minifiedOk && existsSync(minified)) {
   } else {
     process.stdout.write('\n=== browser smoke\nSKIPPED (--no-browser): the inscription path is unverified\n');
   }
+
+  run('fee estimate', 'node', ['scripts/fee-estimate.mjs', '--rate', '1', '--rate', '5', minified]);
 
   const sha256 = createHash('sha256').update(artifact).digest('hex');
   const commit = spawnSync('git', ['rev-parse', 'HEAD'], { cwd: root, encoding: 'utf8' }).stdout?.trim();
