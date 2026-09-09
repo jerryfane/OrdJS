@@ -12,27 +12,25 @@
  */
 
 class OrdJS {
-    // Inscribed CBOR decoder (cbor-js). Replaceable: see README on the decoder.
-    static decoderUrl = '/content/a9f6a9b050af3de1a4ce714978c1f2231ba731f1f46731a16d0e411f89308566i0';
-
     constructor(baseURL) {
       this.baseURL = baseURL;
+      this.isInitialized = false;
       this.decoderPromise = null;
     }
 
-    // Kept for compatibility: nothing needs initialising, and no method waits on
-    // it. It sets isInitialized so an existing caller that reads the flag after
-    // awaiting init() still sees true.
+    // Kept for compatibility: nothing needs initialising and no method waits on
+    // it, but the flag is still set so an existing caller that awaits init() and
+    // reads it sees true.
     async init() {
       this.isInitialized = true;
     }
 
-    // The CBOR decoder is loaded only when decoded metadata is requested, once,
-    // shared by concurrent callers. OrdJS.decoderUrl points at the inscribed
-    // decoder; override it to test a replacement before it is inscribed.
+    // The CBOR decoder is inscribed on Bitcoin mainnet and loaded only when
+    // decoded metadata is requested. Concurrent callers share one load, and a
+    // failed load is retried rather than cached.
     loadAndUseDependency() {
       if (!this.decoderPromise) {
-        this.decoderPromise = this.loadScript(OrdJS.decoderUrl)
+        this.decoderPromise = this.loadScript('/content/a9f6a9b050af3de1a4ce714978c1f2231ba731f1f46731a16d0e411f89308566i0')
           .catch((error) => {
             this.decoderPromise = null;
             throw error;
@@ -93,7 +91,8 @@ class OrdJS {
       return this.request(`/r/children/${inscriptionId}/inscriptions${OrdJS.given(page) ? `/${page}` : ''}`);
     }
 
-    // Block statistics for a height, hash, or 'latest'.
+    // Block statistics for a height or a 64-character block hash. ord parses this
+    // segment as a height or hash only: 'latest' is rejected with 400.
     getBlockInfo(query) {
       return this.request(`/r/blockinfo/${query}`);
     }
@@ -125,6 +124,11 @@ class OrdJS {
     // latest inscription on the sat. Requires an ord with the sat index; an empty
     // sat and a server without that index both answer 404, and the thrown error
     // carries ord's own explanation of which it was.
+    //
+    // NOTE the deliberate difference from getSatLastInscriptionContent, which
+    // resolves null for an empty sat because /r/sat/<n>/at/-1 answers 200 with
+    // {"id": null}. Switching to this cheaper method converts that null into a
+    // thrown 404.
     getSatInscriptionContent(satNumber, index = -1) {
       return this.fetchContent(`/r/sat/${satNumber}/at/${index}/content`);
     }

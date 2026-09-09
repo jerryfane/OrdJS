@@ -14,11 +14,19 @@ import { fileURLToPath } from 'node:url';
 import { chromium } from 'playwright';
 
 const LIB_ID = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaai0';
-const DECODER_PATH = '/content/deadbeefi0';
+// The library asks for its decoder at this hard-coded inscription path. Serving
+// the candidate there is what lets a replacement be tested without spending a
+// single inscribed byte on a test hook.
+const DECODER_PATH = '/content/a9f6a9b050af3de1a4ce714978c1f2231ba731f1f46731a16d0e411f89308566i0';
 
-const decoderPath = process.argv[2] ?? fileURLToPath(new URL('../vendor/cbor2-decoder.js', import.meta.url));
+const argv = process.argv.slice(2);
+const libraryPath = argv.includes('--library')
+  ? argv[argv.indexOf('--library') + 1]
+  : fileURLToPath(new URL('../src/content/OrdJS.js', import.meta.url));
+const decoderPath = argv.find((arg) => arg.endsWith('.js') && arg !== libraryPath)
+  ?? fileURLToPath(new URL('../vendor/cbor2-decoder.js', import.meta.url));
 const decoder = await readFile(decoderPath, 'utf8');
-const library = await readFile(new URL('../src/content/OrdJS.js', import.meta.url), 'utf8');
+const library = await readFile(libraryPath, 'utf8');
 const suite = JSON.parse(await readFile(new URL('../test/fixtures/rfc8949-appendix-a.json', import.meta.url), 'utf8'));
 
 const server = createServer(async (req, res) => {
@@ -57,7 +65,6 @@ try {
   await page.goto(`${origin}/`, { waitUntil: 'load' });
 
   report = await page.evaluate(async ({ decoderPath, suite }) => {
-    OrdJS.decoderUrl = decoderPath;
     const ord = new OrdJS('');
 
     // JSON cannot express the exact expectation for 64-bit vectors, so those are
@@ -112,7 +119,37 @@ try {
       plainObject: JSON.stringify(await ord.getDecodedMetadata('a26161016162 02'.replace(' ', '')))
     };
 
-    return { total: suite.vectors.length, passed, failures, regressions, decoderLoads: document.querySelectorAll(`script[src="${decoderPath}"]`).length };
+    // Shape changes a consumer of the CURRENT decoder would absorb. These are not
+    // failures — the candidate is correct here — but they are migration cost, and
+    // the RFC fixture cannot show them because upstream lists these vectors as
+    // diagnostic-only. Recorded so the README cannot understate the migration.
+    const describe = (value) => {
+      if (value instanceof Map) return `Map(${value.size})`;
+      if (value instanceof Date) return 'Date';
+      if (value instanceof URL) return 'URL';
+      if (value instanceof Uint8Array) return 'Uint8Array';
+      if (value && typeof value === 'object') return value.constructor?.name ?? 'object';
+      return typeof value;
+    };
+    const migration = {};
+    for (const [label, hex] of [
+      ['integer-keyed map {1:2,3:4}', 'a201020304'],
+      ['tag 0 date string', 'c074323031332d30332d32315432303a30343a30305a'],
+      ['tag 1 epoch', 'c11a514b67b0'],
+      ['tag 23 expected-base16', 'd74401020304'],
+      ['tag 24 encoded-cbor', 'd818456449455446'],
+      ['tag 32 URI', 'd82076687474703a2f2f7777772e6578616d706c652e636f6d'],
+      ['byte string', '4401020304'],
+      ['string-keyed map {a:1,b:2}', 'a26161016162026'.slice(0, 14)]
+    ]) {
+      try {
+        migration[label] = describe(await ord.getDecodedMetadata(hex));
+      } catch (error) {
+        migration[label] = `THROW ${error.message}`;
+      }
+    }
+
+    return { total: suite.vectors.length, passed, failures, regressions, migration, decoderLoads: document.querySelectorAll(`script[src="${decoderPath}"]`).length };
   }, { decoderPath: DECODER_PATH, suite });
 } finally {
   await browser.close();
@@ -129,7 +166,10 @@ if (r.plainObject !== '{"a":1,"b":2}') problems.push(`string-keyed map is not a 
 if (report.decoderLoads !== 1) problems.push(`decoder loaded ${report.decoderLoads} times`);
 
 console.log(`RFC 8949 Appendix A: ${report.passed}/${report.total} vectors decoded correctly in Chromium`);
+console.log(`  (${report.total} of the 82 upstream entries carry a decoded value; the other 23 are diagnostic-only`);
+console.log('   and include the tag and integer-keyed-map cases listed under migration below)');
 console.log(`regressions fixed vs the inscribed decoder: ${JSON.stringify(r, null, 2)}`);
+console.log(`migration shape changes vs the inscribed decoder: ${JSON.stringify(report.migration, null, 2)}`);
 if (problems.length > 0) {
   console.error('decoder smoke FAILED');
   for (const problem of problems) console.error(`  - ${problem}`);

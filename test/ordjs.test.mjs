@@ -173,17 +173,23 @@ test('NaN path segments fall back instead of reaching the server', async () => {
 // Routes verified against mainnet ordinals.com before these wrappers were added:
 // /r/inscription/<id>, /r/parents/<id>[/<page>] (paginates with page_index),
 // /r/children/<id>/inscriptions[/<page>] (paginates with page),
-// /r/undelegated-content/<id>, /r/blockinfo/<height|hash|latest>.
+// /r/undelegated-content/<id>, /r/blockinfo/<height|hash>.
+//
+// This test can only prove string construction; it cannot prove a route exists.
+// 'latest' was documented here until a live probe returned 400 ("invalid digit
+// found in string"), so the height and hash forms are what is pinned.
 test('endpoint wrappers build their documented routes', async () => {
   const { OrdJS, calls } = load({ body: json({ ok: true }) });
   const ord = new OrdJS('');
+  const hash = '000000000000000000024e0a0ba1e6b3ae8b0b4b1e0b9a3d0a8a1b2c3d4e5f6a7';
 
   await ord.getInscription('abci0');
   await ord.getParents('abci0');
   await ord.getParents('abci0', 0);
   await ord.getChildrenInscriptions('abci0');
   await ord.getChildrenInscriptions('abci0', 2);
-  await ord.getBlockInfo('latest');
+  await ord.getBlockInfo(840000);
+  await ord.getBlockInfo(hash);
 
   assert.deepEqual(calls, [
     '/r/inscription/abci0',
@@ -191,7 +197,8 @@ test('endpoint wrappers build their documented routes', async () => {
     '/r/parents/abci0/0',
     '/r/children/abci0/inscriptions',
     '/r/children/abci0/inscriptions/2',
-    '/r/blockinfo/latest'
+    '/r/blockinfo/840000',
+    `/r/blockinfo/${hash}`
   ]);
 });
 

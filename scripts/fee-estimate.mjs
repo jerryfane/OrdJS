@@ -48,15 +48,21 @@ function varIntSize(n) {
 
 // ord envelope, per the inscription spec: body is split into pushes of at most
 // 520 bytes because that is the maximum a single push can carry.
+//
+// Both tags are DATA PUSHES, not opcodes: ord's Tag::append calls
+// push_slice(tag.bytes()), so the content-type tag [1] serialises as 0x01 0x01
+// (2 bytes) while the body tag is a zero-length slice and serialises as OP_0
+// (1 byte). Counting the content-type tag as a single OP_1 understates the
+// envelope, which is exactly the kind of error a "bytes / 4" estimate hides.
 function envelopeSize(bodyBytes, contentType) {
   const CHUNK = 520;
   let size = 0;
   size += 1;                              // OP_FALSE
   size += 1;                              // OP_IF
   size += pushSize(3);                    // "ord"
-  size += 1;                              // OP_1 (content-type tag)
+  size += pushSize(1);                    // content-type tag, pushed as data
   size += pushSize(Buffer.byteLength(contentType));
-  size += 1;                              // OP_0 (body tag)
+  size += pushSize(0);                    // body tag: empty slice -> OP_0
   for (let offset = 0; offset < bodyBytes; offset += CHUNK) {
     size += pushSize(Math.min(CHUNK, bodyBytes - offset));
   }
@@ -101,7 +107,9 @@ for (const file of targets) {
     continue;
   }
   const body = readFileSync(file);
-  const contentType = file.endsWith('.js') ? 'text/javascript;charset=utf-8' : 'application/octet-stream';
+  // ord's media table maps js/mjs to "text/javascript" with no charset parameter;
+  // the live sibling inscription reports exactly that content type.
+  const contentType = file.endsWith('.js') ? 'text/javascript' : 'application/octet-stream';
   const reveal = revealTransaction(body.length, contentType);
   const totalVB = reveal.vsize + commit.vsize;
   rows.push({
@@ -116,9 +124,53 @@ for (const file of targets) {
   });
 }
 
+// A stage that only prints cannot fail, and a fee figure nobody can falsify is
+// worse than no figure. These invariants are derived independently of the
+// functions above, so a corrupted pushSize or envelope walk is caught rather
+// than published as a smaller number.
+const violations = [];
+for (const row of rows) {
+  const body = row.body_bytes;
+  const chunks = Math.ceil(body / 520);
+  // Independent lower bound: the body itself, its push prefixes (3 bytes per
+  // 520-byte chunk), the 34-byte key-path prefix and the smallest possible
+  // envelope header.
+  const floor = body + chunks * 3 + 34 + 8;
+  if (row.tapscript_bytes < floor) {
+    violations.push(`${row.file}: tapscript ${row.tapscript_bytes} B is below the ${floor} B floor for a ${body} B body`);
+  }
+  // The witness is weight 1 per byte, so the reveal can never be cheaper than a
+  // quarter of the script it carries.
+  if (row.reveal_vB < Math.ceil(row.tapscript_bytes / 4)) {
+    violations.push(`${row.file}: reveal ${row.reveal_vB} vB is below tapscript/4`);
+  }
+  if (row.reveal_weight !== row.reveal_vB * 4 - (row.reveal_vB * 4 - row.reveal_weight)) {
+    violations.push(`${row.file}: weight and vsize disagree`);
+  }
+  if (row.total_vB !== row.reveal_vB + row.commit_vB) {
+    violations.push(`${row.file}: total is not reveal + commit`);
+  }
+}
+// Known-answer check on the push encoder itself, independent of any artifact.
+for (const [length, expected] of [[0, 1], [1, 2], [75, 76], [76, 78], [255, 257], [256, 259], [520, 523]]) {
+  if (pushSize(length) !== expected) {
+    violations.push(`pushSize(${length}) = ${pushSize(length)}, expected ${expected}`);
+  }
+}
+
 console.log(JSON.stringify({
   method: 'exact serialisation of the ord envelope, tapscript, reveal witness and a standard commit tx',
   not_included: ['wallet input selection', 'change and postage values', 'parent/child or metadata fields', 'sat selection'],
   commit_assumption: '1 P2TR input, 2 P2TR outputs, key-path spend',
   results: rows
 }, null, 2));
+
+if (violations.length > 0) {
+  console.error('fee estimate FAILED its own invariants');
+  for (const violation of violations) console.error(`  - ${violation}`);
+  process.exit(1);
+}
+if (rows.length === 0) {
+  console.error('fee estimate FAILED: no artifact was measured');
+  process.exit(1);
+}

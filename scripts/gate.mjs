@@ -74,12 +74,16 @@ if (minifiedOk && existsSync(minified)) {
     run('browser smoke (minified artifact, chromium/firefox/webkit)', 'node',
       ['scripts/browser-smoke.mjs', minified, '--engine', 'all']);
     // The decoder candidate is a separate inscription, so it is gated separately:
-    // RFC 8949 Appendix A decoded in Chromium through OrdJS.decoderUrl.
+    // RFC 8949 Appendix A decoded in Chromium through the recursive loader, and
+    // against the MINIFIED library, because that is what would ship.
     if (existsSync(join(root, 'vendor/cbor2-decoder.js'))) {
-      run('decoder candidate conformance', 'node', ['scripts/decoder-smoke.mjs']);
+      run('decoder candidate conformance', 'node', ['scripts/decoder-smoke.mjs', '--library', minified]);
+      run('decoder manifest matches artifact', 'node', ['scripts/check-manifest.mjs']);
     }
   } else {
-    process.stdout.write('\n=== browser smoke\nSKIPPED (--no-browser): the inscription path is unverified\n');
+    process.stdout.write('\n=== browser smoke\n' +
+      'SKIPPED (--no-browser): the inscription path, all three engines AND the decoder\n' +
+      'candidate conformance are unverified in this run\n');
   }
 
   run('fee estimate', 'node', ['scripts/fee-estimate.mjs', '--rate', '1', '--rate', '5', minified]);
@@ -99,7 +103,9 @@ if (minifiedOk && existsSync(minified)) {
     live_inscription_body_bytes: BUDGET_BYTES
   }, null, 2) + '\n');
   process.stdout.write('\nNot covered by this gate, and required before inscribing: a real ord server ' +
-    '(indexed and non-indexed), Firefox and WebKit, and a commit/reveal fee dry-run at the chosen rate.\n');
+    '(sat index enabled AND disabled), and a wallet dry-run of the real commit/reveal transaction. ' +
+    'The fee stage serialises the envelope, tapscript and witness exactly but assumes a standard ' +
+    'commit shape (1 P2TR input, 2 P2TR outputs).\n');
 }
 
 const failed = steps.filter((step) => !step.ok);
