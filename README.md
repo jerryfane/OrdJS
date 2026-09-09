@@ -98,8 +98,19 @@ Every route below was checked against mainnet `ordinals.com` before being wrappe
 | `getSatLastInscriptionContent(sat)` | above, then `/content/<id>` | resolves `null` for an empty sat |
 | `getInscriptionContent(id)` | `/content/<id>` | follows a delegate; returns `{mime, base64}` |
 | `getUndelegatedContent(id)` | `/r/undelegated-content/<id>` | the inscription's own bytes, delegate not followed |
+| `getSatInscriptionContent(sat, index?)` | `/r/sat/<sat>/at/<index>/content` | one request instead of two; needs the sat index; defaults to `-1` |
 
 `request(endpoint)` remains available for any JSON route without a wrapper.
+
+### Errors
+
+Every failing request throws `OrdJS <status> <endpoint>: <ord's own message>` with a
+`status` property, for example
+`OrdJS 404 /r/sat/1/at/0/content: inscription on sat 1 not found`. Branch on
+`error.status`, not on message text. Note that a 404 from
+`getSatInscriptionContent` means either an empty sat **or** a server running
+without the sat index; ord's message distinguishes them, so it is preserved rather
+than collapsed into "not found".
 
 
 ## Tests and the release gate
