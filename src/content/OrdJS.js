@@ -43,7 +43,7 @@ class OrdJS {
     async request(endpoint) {
       const response = await fetch(this.baseURL + endpoint);
       if (!response.ok) {
-        throw new Error(`HTTP error! Status: ${response.status}`);
+        throw await OrdJS.httpError(endpoint, response);
       }
       return response.json();
     }
@@ -115,10 +115,18 @@ class OrdJS {
       return this.fetchContent(`/r/undelegated-content/${inscriptionId}`);
     }
 
+    // One request instead of resolving the ID and then fetching it. Index -1 is the
+    // latest inscription on the sat. Requires an ord with the sat index; an empty
+    // sat and a server without that index both answer 404, and the thrown error
+    // carries ord's own explanation of which it was.
+    getSatInscriptionContent(satNumber, index = -1) {
+      return this.fetchContent(`/r/sat/${satNumber}/at/${index}/content`);
+    }
+
     async fetchContent(endpoint) {
       const response = await fetch(this.baseURL + endpoint);
       if (!response.ok) {
-        throw new Error(`HTTP error! Status: ${response.status}`);
+        throw await OrdJS.httpError(endpoint, response);
       }
       const contentType = response.headers.get('Content-Type');
       const bytes = new Uint8Array(await response.arrayBuffer());
@@ -126,6 +134,17 @@ class OrdJS {
         mime: contentType,
         base64: OrdJS.toBase64(bytes)
       };
+    }
+
+    // ord explains its own failures in the response body ("inscription on sat 1 not
+    // found", "...metadata not found"). Carrying that text turns an opaque status
+    // into an actionable message; the status and endpoint stay in the message so a
+    // caller can still branch on them.
+    static async httpError(endpoint, response) {
+      const detail = await response.text().catch(() => '');
+      const error = new Error(`OrdJS ${response.status} ${endpoint}: ${detail.trim().slice(0, 200)}`);
+      error.status = response.status;
+      return error;
     }
 
     async getSatLastInscription(satNumber) {
