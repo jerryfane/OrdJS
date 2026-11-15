@@ -8,7 +8,7 @@ on:
 
 jobs:
   gate:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04  # ubuntu-latest became 26.04 (2026-11), unsupported by Playwright 1.56.1
     steps:
       - uses: actions/checkout@v4
 
