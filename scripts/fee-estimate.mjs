@@ -1,10 +1,5 @@
-// Fee estimate built from the ACTUAL inscription structure, not a bytes/4 guess.
-//
-// It assembles the real ord envelope for a given artifact — OP_FALSE OP_IF "ord"
-// OP_1 <content-type> OP_0 <body in 520-byte pushes> OP_ENDIF — measures the
-// tapscript, builds the reveal witness (signature, script, control block) and a
-// standard commit transaction, then computes weight and virtual size the way a
-// node does.
+// CLI for the fee estimate in scripts/fee.mjs (exact ord envelope, tapscript,
+// reveal witness and a standard commit tx), plus its known-answer checks.
 //
 //   node scripts/fee-estimate.mjs [--rate 1] [--rate 5] [file ...]
 //
@@ -15,6 +10,7 @@
 
 import { readFileSync, existsSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
+import { commitTransaction, envelopeSize, estimateInscription, pushSize, revealTransaction, satsAt } from './fee.mjs';
 
 const args = process.argv.slice(2);
 const rates = [];
@@ -30,75 +26,6 @@ const targets = files.length > 0 ? files : [
   `${root}/vendor/cbor2-decoder.js`
 ];
 
-// Bitcoin script push encoding: this is where "bytes ÷ 4" quietly loses accuracy.
-function pushSize(dataLength) {
-  if (dataLength === 0) return 1;                     // OP_0
-  if (dataLength <= 75) return 1 + dataLength;        // direct push
-  if (dataLength <= 255) return 2 + dataLength;       // OP_PUSHDATA1
-  if (dataLength <= 65535) return 3 + dataLength;     // OP_PUSHDATA2
-  return 5 + dataLength;                              // OP_PUSHDATA4
-}
-
-function varIntSize(n) {
-  if (n < 0xfd) return 1;
-  if (n <= 0xffff) return 3;
-  if (n <= 0xffffffff) return 5;
-  return 9;
-}
-
-// ord envelope, per the inscription spec: body is split into pushes of at most
-// 520 bytes because that is the maximum a single push can carry.
-//
-// Both tags are DATA PUSHES, not opcodes: ord's Tag::append calls
-// push_slice(tag.bytes()), so the content-type tag [1] serialises as 0x01 0x01
-// (2 bytes) while the body tag is a zero-length slice and serialises as OP_0
-// (1 byte). Counting the content-type tag as a single OP_1 understates the
-// envelope, which is exactly the kind of error a "bytes / 4" estimate hides.
-function envelopeSize(bodyBytes, contentType) {
-  const CHUNK = 520;
-  let size = 0;
-  size += 1;                              // OP_FALSE
-  size += 1;                              // OP_IF
-  size += pushSize(3);                    // "ord"
-  size += pushSize(1);                    // content-type tag, pushed as data
-  size += pushSize(Buffer.byteLength(contentType));
-  size += pushSize(0);                    // body tag: empty slice -> OP_0
-  for (let offset = 0; offset < bodyBytes; offset += CHUNK) {
-    size += pushSize(Math.min(CHUNK, bodyBytes - offset));
-  }
-  size += 1;                              // OP_ENDIF
-  return size;
-}
-
-function revealTransaction(bodyBytes, contentType) {
-  // Tapscript: <32-byte internal key> OP_CHECKSIG, then the envelope.
-  const script = pushSize(32) + 1 + envelopeSize(bodyBytes, contentType);
-
-  // Non-witness part: version, input count, outpoint+empty scriptSig+sequence,
-  // output count, one P2TR output, locktime.
-  const base = 4 + 1 + (32 + 4 + 1 + 4) + 1 + (8 + 1 + 34) + 4;
-
-  // Witness: item count, 64-byte Schnorr signature, the script, a control block
-  // for a single-leaf tree (1 + 32).
-  const witness = 1
-    + varIntSize(64) + 64
-    + varIntSize(script) + script
-    + varIntSize(33) + 33;
-
-  // Segwit marker and flag are witness-weighted.
-  const weight = base * 4 + (2 + witness);
-  return { script, base, witness, weight, vsize: Math.ceil(weight / 4) };
-}
-
-function commitTransaction() {
-  // One P2TR input, two P2TR outputs (reveal address + change): the ordinary
-  // shape a wallet produces. Key-path spend, so the witness is one signature.
-  const base = 4 + 1 + (32 + 4 + 1 + 4) + 1 + 2 * (8 + 1 + 34) + 4;
-  const witness = 1 + varIntSize(64) + 64;
-  const weight = base * 4 + (2 + witness);
-  return { weight, vsize: Math.ceil(weight / 4) };
-}
-
 const commit = commitTransaction();
 const rows = [];
 for (const file of targets) {
@@ -110,18 +37,17 @@ for (const file of targets) {
   // ord's media table maps js/mjs to "text/javascript" with no charset parameter;
   // the live sibling inscription reports exactly that content type.
   const contentType = file.endsWith('.js') ? 'text/javascript' : 'application/octet-stream';
-  const reveal = revealTransaction(body.length, contentType);
-  const totalVB = reveal.vsize + commit.vsize;
+  const estimate = estimateInscription({ bodyBytes: body.length, contentType });
   rows.push({
     file: file.replace(root, ''),
-    body_bytes: body.length,
-    content_type: contentType,
-    tapscript_bytes: reveal.script,
-    reveal_weight: reveal.weight,
-    reveal_vB: reveal.vsize,
-    commit_vB: commit.vsize,
-    total_vB: totalVB,
-    sats: Object.fromEntries(rates.map((rate) => [`${rate}_sat_vB`, totalVB * rate]))
+    body_bytes: estimate.bodyBytes,
+    content_type: estimate.contentType,
+    tapscript_bytes: estimate.tapscriptBytes,
+    reveal_weight: estimate.revealWeight,
+    reveal_vB: estimate.revealVb,
+    commit_vB: estimate.commitVb,
+    total_vB: estimate.totalVb,
+    sats: Object.fromEntries(rates.map((rate) => [`${rate}_sat_vB`, satsAt(estimate.totalVb, rate)]))
   });
 }
 
